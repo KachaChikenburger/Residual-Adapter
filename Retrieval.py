@@ -103,12 +103,14 @@ def set_trainable(model):
         for param in module.parameters():
             param.requires_grad = False
     for name, module in model.named_modules():
-        if ('BiShareAdapter' in name) or ('mmadapter' in name)  or ('MMadapter' in name):
+        lowered_name = name.lower()
+        if ('bishareadapter' in lowered_name) or ('mmadapter' in lowered_name):
             module.train()
             for param in module.parameters():
                 param.requires_grad = True
     for name, param in model.named_parameters():
-        if ('gate' in name) or ('temp' in name):
+        is_adapter_scale = name.endswith('mmadapter.scale') or ('.mmadapter.scale' in name)
+        if ('gate' in name) or ('temp' in name) or is_adapter_scale:
             param.requires_grad = True
             
             

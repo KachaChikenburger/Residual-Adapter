@@ -9,6 +9,7 @@ from PIL import Image
 import open_clip
 # from inference_tool import get_preprocess
 from open_clip import tokenizer
+from open_clip.model import normalize_adapter_config
 
 # clip, _, _ = open_clip.create_model_and_transforms("ViT-B/32")
 # checkpoint = torch.load(ckpt_path, map_location="cpu")
@@ -24,6 +25,8 @@ class HarMA(HarMABase):
         super().__init__(config, load_vision_params=True, load_text_params=True, use_contrastive_loss=True, \
                          use_affil_loss=False)
         self.config = config
+        self.config['adapter'] = normalize_adapter_config(self.config.get('adapter'))
+        self.adapter_cfg = self.config['adapter']
         self.use_affil_loss = config['use_affil_loss']
         self.use_triplet_loss = config['use_triplet_loss']
         self.create_and_load_pretrained(config)
@@ -44,12 +47,14 @@ class HarMA(HarMABase):
                     precision='fp32',
                     device='cpu',
                     jit=False,
+                    adapter_cfg=self.adapter_cfg,
                 )
             else:
                 self.model, _, _ = open_clip.create_model_and_transforms(
                     "ViT-B/32",
                     pretrained=clip_pretrained_path,
                     device='cpu',
+                    adapter_cfg=self.adapter_cfg,
                 )
         else:
             # Build the CLIP backbone without any remote pretrained download.
@@ -59,6 +64,7 @@ class HarMA(HarMABase):
                 "ViT-B/32",
                 pretrained=None,
                 device='cpu',
+                adapter_cfg=self.adapter_cfg,
             )
 
         if self.config['model'] == 'geo':

@@ -100,6 +100,7 @@ def create_model(
         force_custom_text: bool = False,
         pretrained_image: bool = False,
         cache_dir: Optional[str] = None,
+        adapter_cfg: Optional[dict] = None,
 ):
     model_name = model_name.replace('/', '-')  # for callers using old naming with / in ViT names
     if isinstance(device, str):
@@ -114,6 +115,7 @@ def create_model(
             device=device,
             jit=jit,
             cache_dir=cache_dir,
+            adapter_cfg=adapter_cfg,
         )
     else:
         #走 Vit-B-32分支
@@ -139,9 +141,9 @@ def create_model(
         custom_text = model_cfg.pop('custom_text', False) or force_custom_text
 
         if custom_text:
-            model = CustomTextCLIP(**model_cfg, cast_dtype=cast_dtype)
+            model = CustomTextCLIP(**model_cfg, cast_dtype=cast_dtype, adapter_cfg=adapter_cfg)
         else:
-            model = CLIP(**model_cfg, cast_dtype=cast_dtype)
+            model = CLIP(**model_cfg, cast_dtype=cast_dtype, adapter_cfg=adapter_cfg)
 
         pretrained_cfg = {}
         if pretrained:
@@ -188,6 +190,7 @@ def create_model_and_transforms(
         image_mean: Optional[Tuple[float, ...]] = None,
         image_std: Optional[Tuple[float, ...]] = None,
         cache_dir: Optional[str] = None,
+        adapter_cfg: Optional[dict] = None,
 ):
     model = create_model(
         model_name,
@@ -199,6 +202,7 @@ def create_model_and_transforms(
         force_custom_text=force_custom_text,
         pretrained_image=pretrained_image,
         cache_dir=cache_dir,
+        adapter_cfg=adapter_cfg,
     )
 
     image_mean = image_mean or getattr(model.visual, 'image_mean', None)
@@ -231,6 +235,7 @@ def create_model_from_pretrained(
         image_mean: Optional[Tuple[float, ...]] = None,
         image_std: Optional[Tuple[float, ...]] = None,
         cache_dir: Optional[str] = None,
+        adapter_cfg: Optional[dict] = None,
 ):
     if not is_pretrained_cfg(model_name, pretrained) and not os.path.exists(pretrained):
         raise RuntimeError(
@@ -246,6 +251,7 @@ def create_model_from_pretrained(
         force_quick_gelu=force_quick_gelu,
         force_custom_text=force_custom_text,
         cache_dir=cache_dir,
+        adapter_cfg=adapter_cfg,
     )
 
     if not return_transform:

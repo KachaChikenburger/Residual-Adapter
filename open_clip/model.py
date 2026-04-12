@@ -5,7 +5,7 @@ Adapted from https://github.com/openai/CLIP. Originally MIT License, Copyright (
 from dataclasses import dataclass
 import logging
 import math
-from typing import Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -43,6 +43,51 @@ class CLIPTextCfg:
     heads: int = 8
     layers: int = 12
     ls_init_value: Optional[float] = None  # layer scale initial value
+
+
+ADAPTER_BRANCHES = {'legacy', 'parallel_single_mixer', 'none'}
+ADAPTER_MODALITY_DEFAULTS = {
+    'enabled': True,
+    'layer_ids': None,
+    'bottleneck_dim': 128,
+    'mixer_num_heads': 8,
+    'dropout': 0.0,
+    'scale_init': 0.0,
+}
+
+
+def normalize_adapter_config(adapter_cfg: Optional[Dict]) -> Dict:
+    raw_cfg = adapter_cfg if isinstance(adapter_cfg, dict) else {}
+    branch = raw_cfg.get('branch', 'legacy')
+    if branch not in ADAPTER_BRANCHES:
+        raise ValueError(f"Unsupported adapter branch: {branch}")
+
+    shared_defaults = {
+        key: raw_cfg.get(key, default_value)
+        for key, default_value in ADAPTER_MODALITY_DEFAULTS.items()
+    }
+    normalized = {'branch': branch}
+    for modality in ('vision', 'text'):
+        modality_cfg = dict(shared_defaults)
+        raw_modality_cfg = raw_cfg.get(modality) or {}
+        modality_cfg.update(raw_modality_cfg)
+        normalized[modality] = modality_cfg
+
+    return normalized
+
+
+def _resolve_layer_ids(layer_ids, num_layers: int) -> List[int]:
+    if layer_ids is None:
+        return list(range(num_layers))
+
+    resolved = []
+    for layer_id in layer_ids:
+        if not isinstance(layer_id, int):
+            continue
+        if 0 <= layer_id < num_layers:
+            resolved.append(layer_id)
+
+    return sorted(set(resolved))
 
 
 def get_cast_dtype(precision: str):
@@ -146,7 +191,7 @@ def _build_text_tower(
     return text
 
 
-class BiShareAdapter(nn.Module):
+class LegacyBiShareAdapter(nn.Module):
     """
     A module that implements a bidirectional shared adapter with multi-head attention.
     
@@ -167,7 +212,7 @@ class BiShareAdapter(nn.Module):
             hidden_dim (int): The dimension of the hidden layer.
             num_heads (int): The number of heads in multi-head attention.
         """
-        super(BiShareAdapter, self).__init__()
+        super().__init__()
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
 
@@ -207,7 +252,7 @@ class BiShareAdapter(nn.Module):
         return x + xinit
 
     
-class MMadapter(nn.Module):
+class LegacyMMadapter(nn.Module):
     """
     A module that implements a multimodal adapter with shared components and multi-head attention.
     
@@ -218,7 +263,9 @@ class MMadapter(nn.Module):
         multihead_attention (nn.MultiheadAttention): Multi-head attention layer.
         gate1 (nn.Parameter): A learnable gate parameter for blending attention output with input.
     """
-    def __init__(self, share_adapter, hidden_size, layer_id=0):
+    adapter_mode = 'legacy'
+
+    def __init__(self, share_adapter, hidden_size, layer_id=0, bottleneck_dim=128, num_heads=8):
         """
         Inits MMadapter with a shared adapter, hidden size, and layer ID.
         
@@ -227,11 +274,11 @@ class MMadapter(nn.Module):
             hidden_size (int): The size of the hidden layer.
             layer_id (int, optional): The layer ID, defaults to 0.
         """
-        super(MMadapter, self).__init__()
-        self.img_proj_down = nn.Linear(hidden_size, 128)
-        self.img_proj_up = nn.Linear(128, hidden_size)
+        super().__init__()
+        self.img_proj_down = nn.Linear(hidden_size, bottleneck_dim)
+        self.img_proj_up = nn.Linear(bottleneck_dim, hidden_size)
         self.BiShareAdapterxx = share_adapter
-        self.multihead_attention = nn.MultiheadAttention(128, 8)
+        self.multihead_attention = nn.MultiheadAttention(bottleneck_dim, num_heads)
         self.gate1 = nn.Parameter(torch.tensor(0.6), requires_grad=True)
         self.init_weights()
 
@@ -240,7 +287,7 @@ class MMadapter(nn.Module):
         self.img_proj_up.weight.data.zero_()
         self.img_proj_up.bias.data.zero_()
 
-    def forward(self, x):
+    def forward(self, x, attn_mask=None):
         """
         Forward pass of the MMadapter.
         
@@ -254,38 +301,140 @@ class MMadapter(nn.Module):
         x = self.img_proj_down(x)
         x = F.gelu(x)
         xmid = x
-        x, _ = self.multihead_attention(x, x, x)
+        attn_mask = attn_mask.to(x.dtype) if attn_mask is not None else None
+        x, _ = self.multihead_attention(x, x, x, attn_mask=attn_mask)
         if self.BiShareAdapterxx is not None:
             x = self.BiShareAdapterxx(x)
-        x, _ = self.multihead_attention(x, x, x)
+        x, _ = self.multihead_attention(x, x, x, attn_mask=attn_mask)
         alpha = torch.sigmoid(self.gate1)
         x = alpha * xmid + (1 - alpha) * x
         x = self.img_proj_up(x)
         x = x_init + x
 
         return x
-    
-    
-    
-# definiton of BiShareAdapter and MMadapter for global use
-BiShareAdapter = nn.ModuleList([
-    BiShareAdapter(128, 8)
-    for _ in range(12)
-])
-# MMadapter_img = nn.ModuleList([
-#     MMadapter(None,hidden_size=768,layer_id=layer_id)
-#     for layer_id in range(12)
-# ])
-MMadapter_img = nn.ModuleList([
-    MMadapter(BiShareAdapter[layer_id],hidden_size=768,layer_id=layer_id)
-    for layer_id in range(12)
-])
-MMadapter_text = nn.ModuleList([
-    MMadapter(BiShareAdapter[layer_id],hidden_size=512,layer_id=layer_id)
-    for layer_id in range(12)
-])    
-    
-    
+
+
+class ParallelSingleMixerAdapter(nn.Module):
+    adapter_mode = 'parallel_single_mixer'
+
+    def __init__(self, hidden_size, bottleneck_dim=128, num_heads=8, dropout=0.0, scale_init=0.0):
+        super().__init__()
+        self.img_proj_down = nn.Linear(hidden_size, bottleneck_dim)
+        self.norm = nn.LayerNorm(bottleneck_dim)
+        self.multihead_attention = nn.MultiheadAttention(bottleneck_dim, num_heads, dropout=dropout)
+        self.dropout = nn.Dropout(dropout)
+        self.img_proj_up = nn.Linear(bottleneck_dim, hidden_size)
+        self.scale = nn.Parameter(torch.full((1,), float(scale_init)))
+        self.init_weights()
+
+    def init_weights(self):
+        self.img_proj_up.weight.data.zero_()
+        self.img_proj_up.bias.data.zero_()
+
+    def forward(self, x, attn_mask=None):
+        attn_mask = attn_mask.to(x.dtype) if attn_mask is not None else None
+        x = self.img_proj_down(x)
+        x = F.gelu(x)
+        x = self.norm(x)
+        x, _ = self.multihead_attention(x, x, x, attn_mask=attn_mask)
+        x = self.dropout(x)
+        x = self.img_proj_up(x)
+        return self.scale * x
+
+
+def _build_parallel_adapter_stack(modality_cfg: Dict, hidden_size: int, num_layers: int):
+    if not modality_cfg.get('enabled', True):
+        return None
+
+    active_layers = set(_resolve_layer_ids(modality_cfg.get('layer_ids'), num_layers))
+    if not active_layers:
+        return None
+
+    return [
+        ParallelSingleMixerAdapter(
+            hidden_size=hidden_size,
+            bottleneck_dim=modality_cfg['bottleneck_dim'],
+            num_heads=modality_cfg['mixer_num_heads'],
+            dropout=modality_cfg['dropout'],
+            scale_init=modality_cfg['scale_init'],
+        ) if layer_id in active_layers else None
+        for layer_id in range(num_layers)
+    ]
+
+
+def _build_legacy_adapter_stacks(adapter_cfg: Dict, vision_cfg: CLIPVisionCfg, text_cfg: CLIPTextCfg):
+    vision_layers = vision_cfg.layers if isinstance(vision_cfg.layers, int) else 0
+    text_layers = text_cfg.layers if isinstance(text_cfg.layers, int) else 0
+    vision_modality_cfg = adapter_cfg['vision']
+    text_modality_cfg = adapter_cfg['text']
+
+    vision_active_layers = set(_resolve_layer_ids(vision_modality_cfg.get('layer_ids'), vision_layers))
+    text_active_layers = set(_resolve_layer_ids(text_modality_cfg.get('layer_ids'), text_layers))
+
+    if vision_modality_cfg.get('enabled', True) and text_modality_cfg.get('enabled', True):
+        if (
+            vision_modality_cfg['bottleneck_dim'] != text_modality_cfg['bottleneck_dim']
+            or vision_modality_cfg['mixer_num_heads'] != text_modality_cfg['mixer_num_heads']
+        ):
+            raise ValueError("Legacy adapter branch requires matching bottleneck_dim and mixer_num_heads for vision/text.")
+
+    max_layers = max(vision_layers, text_layers)
+    if not max_layers:
+        return None, None
+
+    primary_cfg = vision_modality_cfg if vision_active_layers else text_modality_cfg
+    shared_dim = primary_cfg['bottleneck_dim']
+    shared_heads = primary_cfg['mixer_num_heads']
+    shared_bank = [
+        LegacyBiShareAdapter(shared_dim, shared_heads)
+        for _ in range(max_layers)
+    ]
+
+    def build_stack(modality_cfg: Dict, hidden_size: int, num_layers: int, active_layers):
+        if num_layers == 0 or not modality_cfg.get('enabled', True) or not active_layers:
+            return None
+        return [
+            LegacyMMadapter(
+                shared_bank[layer_id],
+                hidden_size=hidden_size,
+                layer_id=layer_id,
+                bottleneck_dim=modality_cfg['bottleneck_dim'],
+                num_heads=modality_cfg['mixer_num_heads'],
+            ) if layer_id in active_layers else None
+            for layer_id in range(num_layers)
+        ]
+
+    vision_stack = build_stack(vision_modality_cfg, vision_cfg.width, vision_layers, vision_active_layers)
+    text_stack = build_stack(text_modality_cfg, text_cfg.width, text_layers, text_active_layers)
+    return vision_stack, text_stack
+
+
+def build_adapter_stacks(adapter_cfg: Optional[Dict], vision_cfg: CLIPVisionCfg, text_cfg: CLIPTextCfg):
+    if isinstance(vision_cfg, dict):
+        vision_cfg = CLIPVisionCfg(**vision_cfg)
+    if isinstance(text_cfg, dict):
+        text_cfg = CLIPTextCfg(**text_cfg)
+
+    normalized_cfg = normalize_adapter_config(adapter_cfg)
+    branch = normalized_cfg['branch']
+    if branch == 'none':
+        return None, None, normalized_cfg
+
+    if branch == 'legacy':
+        vision_stack, text_stack = _build_legacy_adapter_stacks(normalized_cfg, vision_cfg, text_cfg)
+        return vision_stack, text_stack, normalized_cfg
+
+    vision_stack = None
+    if isinstance(vision_cfg.layers, int):
+        vision_stack = _build_parallel_adapter_stack(normalized_cfg['vision'], vision_cfg.width, vision_cfg.layers)
+
+    text_stack = None
+    if isinstance(text_cfg.layers, int):
+        text_stack = _build_parallel_adapter_stack(normalized_cfg['text'], text_cfg.width, text_cfg.layers)
+
+    return vision_stack, text_stack, normalized_cfg
+
+
 class CLIP(nn.Module):
     def __init__(
             self,
@@ -294,27 +443,30 @@ class CLIP(nn.Module):
             text_cfg: CLIPTextCfg,
             quick_gelu: bool = False,
             cast_dtype: Optional[torch.dtype] = None,
+            adapter_cfg: Optional[Dict] = None,
     ):
         super().__init__()
-        
-        # self.BiShareAdapter = nn.ModuleList([
-        #     BiShareAdapter(128, 8)
-        #     for _ in range(12)
-        # ])
-        # self.MMadapter_img = nn.ModuleList([
-        #     MMadapter(self.BiShareAdapter[layer_id],hidden_size=768,layer_id=layer_id)
-        #     for layer_id in range(12)
-        # ])
-        # self.MMadapter_text = nn.ModuleList([
-        #     MMadapter(self.BiShareAdapter[layer_id],hidden_size=512,layer_id=layer_id)
-        #     for layer_id in range(12)
-        # ])
-        
-        # self.modalemb = nn.Embedding(2, 768)# 
-        
-        self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype,MMadapter_img=MMadapter_img,MMadapter_aux=None,modalemb=None)
+        vision_adapter_stack, text_adapter_stack, self.adapter_cfg = build_adapter_stacks(adapter_cfg, vision_cfg, text_cfg)
 
-        text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype,MMadapter_text=MMadapter_text,MMadapter_aux=None,modalemb=None)
+        self.visual = _build_vision_tower(
+            embed_dim,
+            vision_cfg,
+            quick_gelu,
+            cast_dtype,
+            MMadapter_img=vision_adapter_stack,
+            MMadapter_aux=None,
+            modalemb=None,
+        )
+
+        text = _build_text_tower(
+            embed_dim,
+            text_cfg,
+            quick_gelu,
+            cast_dtype,
+            MMadapter_text=text_adapter_stack,
+            MMadapter_aux=None,
+            modalemb=None,
+        )
         self.transformer = text.transformer
         self.vocab_size = text.vocab_size
         self.token_embedding = text.token_embedding
@@ -387,10 +539,24 @@ class CustomTextCLIP(nn.Module):
             text_cfg: CLIPTextCfg,
             quick_gelu: bool = False,
             cast_dtype: Optional[torch.dtype] = None,
+            adapter_cfg: Optional[Dict] = None,
     ):
         super().__init__()
-        self.visual = _build_vision_tower(embed_dim, vision_cfg, quick_gelu, cast_dtype)
-        self.text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
+        vision_adapter_stack, text_adapter_stack, self.adapter_cfg = build_adapter_stacks(adapter_cfg, vision_cfg, text_cfg)
+        self.visual = _build_vision_tower(
+            embed_dim,
+            vision_cfg,
+            quick_gelu,
+            cast_dtype,
+            MMadapter_img=vision_adapter_stack,
+        )
+        self.text = _build_text_tower(
+            embed_dim,
+            text_cfg,
+            quick_gelu,
+            cast_dtype,
+            MMadapter_text=text_adapter_stack,
+        )
         self.logit_scale = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
 
     def lock_image_tower(self, unlocked_groups=0, freeze_bn_stats=False):
@@ -466,6 +632,7 @@ def build_model_from_openai_state_dict(
         state_dict: dict,
         quick_gelu=True,
         cast_dtype=torch.float16,
+        adapter_cfg: Optional[Dict] = None,
 ):
     vit = "visual.proj" in state_dict
 
@@ -512,6 +679,7 @@ def build_model_from_openai_state_dict(
         text_cfg=text_cfg,
         quick_gelu=quick_gelu,  # OpenAI models were trained with QuickGELU
         cast_dtype=cast_dtype,
+        adapter_cfg=adapter_cfg,
     )
 
     for key in ["input_resolution", "context_length", "vocab_size"]:
@@ -573,4 +741,3 @@ def resize_pos_embed(state_dict, model, interpolation: str = 'bicubic', seq_dim=
     
     
     
-

@@ -32,6 +32,24 @@ if_evaluation: False
 save_epoch: False
 save_num_epoch: 10
 
+adapter:
+  #branch: legacy   ##harma分支
+  branch: parallel_single_mixer
+  vision:
+    enabled: true
+    layer_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    bottleneck_dim: 128
+    mixer_num_heads: 8
+    dropout: 0.0
+    scale_init: 0.0
+  text:
+    enabled: true
+    layer_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    bottleneck_dim: 128
+    mixer_num_heads: 8
+    dropout: 0.0
+    scale_init: 0.0
+
 ############## Other Settings ##############
 optimizer: {opt: adamW, lr: 0.0004, weight_decay: 0.04, lr_mult: 2}  
 schedular: {sched: linear, lr: 0.0004, epochs: 10, num_warmup_steps: 0.1} # need to set the epoches, if needed, also lr

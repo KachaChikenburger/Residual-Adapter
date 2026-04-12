@@ -31,6 +31,23 @@ if_evaluation: False
 save_epoch: True
 save_num_epoch: 10
 
+adapter:
+  branch: legacy
+  vision:
+    enabled: true
+    layer_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    bottleneck_dim: 128
+    mixer_num_heads: 8
+    dropout: 0.0
+    scale_init: 0.0
+  text:
+    enabled: true
+    layer_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+    bottleneck_dim: 128
+    mixer_num_heads: 8
+    dropout: 0.0
+    scale_init: 0.0
+
 ############## Other Settings ##############
 optimizer: {opt: adamW, lr: 4e-6, weight_decay: 0.04, lr_mult: 2}  
 schedular: {sched: linear, lr: 4e-6, epochs: 80, num_warmup_steps: 0.1} # need to set the epoches, if needed, also lr
@@ -52,4 +69,3 @@ cycle_num: 3 # 3 # how many times of cycle attention                            
 dropout_r: 0.2                                                                                                      #=##
 head: 8                                                                                                             #=##
 ########################################################################################################################
-

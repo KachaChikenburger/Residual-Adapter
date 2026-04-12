@@ -184,11 +184,14 @@ class ResidualAttentionBlock(nn.Module):
             ("c_proj", nn.Linear(mlp_width, d_model))
         ]))
         self.ls_2 = LayerScale(d_model, ls_init_value) if ls_init_value else nn.Identity()
-        if mmadapter is not None:
+        if mmadapter is not None and mmadapter[layer_id] is not None:
             self.mmadapter = mmadapter[layer_id]
-            self.gate1 = nn.Parameter(torch.tensor(0.6), requires_grad=True)
+            self.mmadapter_mode = getattr(self.mmadapter, 'adapter_mode', 'legacy')
+            if self.mmadapter_mode == 'legacy':
+                self.gate1 = nn.Parameter(torch.tensor(0.6), requires_grad=True)
         else:
             self.mmadapter = None
+            self.mmadapter_mode = None
         # self.layer_id = layer_id
         # gate
 
@@ -199,11 +202,18 @@ class ResidualAttentionBlock(nn.Module):
     def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None):
         xls1 = self.ls_1(self.attention(self.ln_1(x), attn_mask=attn_mask))
         x = x + xls1
-        if self.mmadapter is not None:
+        h = self.ln_2(x)
+        if self.mmadapter_mode == 'parallel_single_mixer':
+            ffn_out = self.ls_2(self.mlp(h))
+            adapter_out = self.mmadapter(h, attn_mask=attn_mask)
+            x = x + ffn_out + adapter_out
+            return x
+
+        if self.mmadapter_mode == 'legacy':
             alpha = torch.sigmoid(self.gate1)
-        xmlp = self.mlp(self.ln_2(x))
-        if self.mmadapter is not None:
-            xmlp =  alpha *self.mmadapter(xmlp) + (1 - alpha) * xmlp
+        xmlp = self.mlp(h)
+        if self.mmadapter_mode == 'legacy':
+            xmlp = alpha * self.mmadapter(xmlp, attn_mask=attn_mask) + (1 - alpha) * xmlp
         x = x + self.ls_2(xmlp)
         return x
 
