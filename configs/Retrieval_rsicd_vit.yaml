@@ -21,6 +21,7 @@ text_encoder: 'data/bert-base-uncased'
 batch_size_train: 214
 batch_size_test: 128
 batch_size_test_text: 128
+clip_pretrained_path: 'pretrain/ViT-B-32.pt'  # local CLIP ViT-B/32 checkpoint path for training/fine-tuning
 
 embed_dim: 512
 temp1: 0.07
@@ -52,4 +53,3 @@ cycle_num: 3 # 3 # how many times of cycle attention                            
 dropout_r: 0.2                                                                                                      #=##
 head: 8                                                                                                             #=##
 ########################################################################################################################
-

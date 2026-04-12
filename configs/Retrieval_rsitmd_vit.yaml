@@ -2,7 +2,7 @@
 train_file:  ['data/finetune/rsitmd_train.json'] # Path to the training data file
 val_file: 'data/finetune/rsitmd_val.json' # Path to the validation data file
 test_file: 'data/finetune/rsitmd_test.json' # Path to the testing data file
-image_root: '../PIR/rsitmd/'
+image_root: 'data/rsitmd/'
 
 ############## Vision encoder setting ##############
 vision_config: 'configs/config_swinT_224.json'  # configs/config_swinT_224.json 'configs/config_swinB_224.json'
@@ -18,9 +18,11 @@ text_encoder: 'data/bert-base-uncased'
 
 ################ Training setting ################
 #== no need revise in general
-batch_size_train: 214
+batch_size_train: 64
 batch_size_test: 128
 batch_size_test_text: 128
+#clip_pretrained_path: 'pretrain/vit_b_32-laion2b_e16-af8dbd0c.pth'  # local CLIP ViT-B/32 checkpoint path for training/fine-tuning
+clip_pretrained_path: 'pretrain/open_clip_pytorch_model.bin'
 
 embed_dim: 512
 temp1: 0.07
@@ -40,7 +42,8 @@ schedular: {sched: linear, lr: 0.0004, epochs: 50, num_warmup_steps: 0.1} # need
 use_affil_loss: False # use affil loss
 use_triplet_loss: False
 center_factor: 1 # if use affil loss, set the center factor                                                      ####
-# indistinct_margin: 0.01                                                                                           ####
+# indistinct_margin: 0.01                 
+triplet_weight: 0
                                                                                                                     ####
 #== 2. Vision Instruction Representation, VIR                                                                       ####
 filter_size: 40 # modify the filter size of vision instruction representation                                       ####
@@ -52,4 +55,3 @@ cycle_num: 3 # 3 # how many times of cycle attention                            
 dropout_r: 0.2                                                                                                      #=##
 head: 8                                                                                                             #=##
 ########################################################################################################################
-

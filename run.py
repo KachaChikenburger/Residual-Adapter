@@ -3,47 +3,63 @@ import sys
 import time
 import random
 import argparse
+import subprocess
+import site
 
 from utils.hdfs_io import HADOOP_BIN, hexists, hmkdir, hcopy
 
 def get_dist_launch(args):  # some examples
+    dist_presets = {
+        'f4': ("0,1,2,3", 4, 9999),
+        'f2': ("0,1", 2, 9999),
+        'f3': ("0,1,2", 3, 9999),
+        'f12': ("1,2", 2, 9999),
+        'f02': ("0,2", 2, 9999),
+        'f03': ("0,3", 2, 9999),
+        'l2': ("2,3", 2, 9998),
+    }
 
-    if args.dist == 'f4':
-        return "CUDA_VISIBLE_DEVICES=0,1,2,3 WORLD_SIZE=4 /home/pjc/.conda/envs/xlvm/bin/python -W ignore -m torch.distributed.launch --master_port 9999 --nproc_per_node=4 " \
-               "--nnodes=1 "
-
-    elif args.dist == 'f2':
-        return "CUDA_VISIBLE_DEVICES=0,1 WORLD_SIZE=2 /root/miniconda3/bin/python -W ignore -m torch.distributed.launch --master_port 9999 --nproc_per_node=2 " \
-               "--nnodes=1 "
-
-    elif args.dist == 'f3':
-        return "CUDA_VISIBLE_DEVICES=0,1,2 WORLD_SIZE=3 /home/pjc/.conda/envs/xlvm/bin/python -W ignore -m torch.distributed.launch --master_port 9999 --nproc_per_node=3 " \
-               "--nnodes=1 "
-
-    elif args.dist == 'f12':
-        return "CUDA_VISIBLE_DEVICES=1,2 WORLD_SIZE=2 /home/pjc/.conda/envs/xlvm/bin/python -W ignore -m torch.distributed.launch --master_port 9999 --nproc_per_node=2 " \
-               "--nnodes=1 "
-
-    elif args.dist == 'f02':
-        return "CUDA_VISIBLE_DEVICES=0,2 WORLD_SIZE=2 /home/pjc/.conda/envs/xlvm/bin/python -W ignore -m torch.distributed.launch --master_port 9999 --nproc_per_node=2 " \
-               "--nnodes=1 "
-
-    elif args.dist == 'f03':
-        return "CUDA_VISIBLE_DEVICES=0,3 WORLD_SIZE=2 /home/pjc/.conda/envs/xlvm/bin/python -W ignore -m torch.distributed.launch --master_port 9999 --nproc_per_node=2 " \
-               "--nnodes=1 "
-
-    elif args.dist == 'l2':
-        return "CUDA_VISIBLE_DEVICES=2,3 WORLD_SIZE=2 /home/pjc/.conda/envs/xlvm/bin/python -W ignore -m torch.distributed.launch --master_port 9998 --nproc_per_node=2 " \
-               "--nnodes=1 "
-
+    if args.dist in dist_presets:
+        visible_devices, world_size, master_port = dist_presets[args.dist]
     elif args.dist.startswith('gpu'):  # use one gpu, --dist "gpu0"
         num = int(args.dist[3:])
         assert 0 <= num <= 8
-        return "CUDA_VISIBLE_DEVICES={:} WORLD_SIZE=1 /home/pjc/.conda/envs/xlvm/bin/python -W ignore -m torch.distributed.launch --master_port 9999 --nproc_per_node=1 " \
-               "--nnodes=1 ".format(num)
-
+        visible_devices, world_size, master_port = str(num), 1, 9999
     else:
         raise ValueError
+
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = visible_devices
+    env["WORLD_SIZE"] = str(world_size)
+
+    lib_paths = []
+    conda_lib = os.path.join(sys.prefix, "lib")
+    if os.path.isdir(conda_lib):
+        lib_paths.append(conda_lib)
+
+    for site_dir in site.getsitepackages():
+        torch_lib = os.path.join(site_dir, "torch", "lib")
+        if os.path.isdir(torch_lib):
+            lib_paths.append(torch_lib)
+
+    existing_ld = env.get("LD_LIBRARY_PATH", "")
+    if existing_ld:
+        lib_paths.append(existing_ld)
+    env["LD_LIBRARY_PATH"] = ":".join(lib_paths)
+
+    launch_cmd = [
+        sys.executable,
+        "-W",
+        "ignore",
+        "-m",
+        "torch.distributed.launch",
+        "--master_port",
+        str(master_port),
+        "--nproc_per_node",
+        str(world_size),
+        "--nnodes=1",
+    ]
+    return launch_cmd, env
 
 
 def get_from_hdfs(file_hdfs):
@@ -67,11 +83,24 @@ def get_from_hdfs(file_hdfs):
 
 
 def run_retrieval(args):
-    dist_launch = get_dist_launch(args)
+    launch_cmd, env = get_dist_launch(args)
+    cmd = launch_cmd + [
+        "--use_env",
+        "Retrieval.py",
+        "--config",
+        args.config,
+        "--output_dir",
+        args.output_dir,
+        "--bs",
+        str(args.bs),
+        "--checkpoint",
+        args.checkpoint
+    ]
+    if args.evaluate:
+        cmd.append("--evaluate")
 
-    os.system(f"{dist_launch} "
-              f"--use_env Retrieval.py --config {args.config} "
-              f"--output_dir {args.output_dir} --bs {args.bs} --checkpoint {args.checkpoint} {'--evaluate' if args.evaluate else ''}")
+    print(f"Launching retrieval with interpreter: {sys.executable}", flush=True)
+    subprocess.run(cmd, env=env, check=True)
 
 
 def run(args):
@@ -113,7 +142,7 @@ if __name__ == '__main__':
     parser.add_argument('--config', default='configs/Retrieval_rsitmd_vit.yaml', type=str, help="if not given, use default")
     parser.add_argument('--bs', default=-1, type=int, help="for each gpu, batch_size = bs // num_gpus; "
                                                   "this option only works for fine-tuning scripts.")
-    parser.add_argument('--seed', default=42, type=int)
+    parser.add_argument('--seed', default=3407, type=int)
     parser.add_argument('--checkpoint', default='-1', type=str, help="for fine-tuning")
     parser.add_argument('--load_ckpt_from', default=' ', type=str, help="load domain pre-trained params")
     # write path: local or HDFS
@@ -124,4 +153,3 @@ if __name__ == '__main__':
     assert hexists(os.path.dirname(args.output_dir))
     hmkdir(args.output_dir)
     run(args)
-

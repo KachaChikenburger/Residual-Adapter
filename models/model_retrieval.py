@@ -1,6 +1,7 @@
 import torch
 from models import HarMABase, load_pretrained_harma
 import torch.nn.functional as F
+import os
 
 import torch
 # from torchinfo import summary
@@ -29,14 +30,46 @@ class HarMA(HarMABase):
         self.align_before = False
 
     def create_and_load_pretrained(self, config):
-        if self.config['model'] == 'geo': 
-            self.model, _ ,_ = open_clip.create_model_and_transforms("ViT-B/32",pretrained='openai')
+        clip_pretrained_path = self.config.get('clip_pretrained_path', '')
+        if clip_pretrained_path:
+            if not os.path.exists(clip_pretrained_path):
+                raise FileNotFoundError(
+                    f"Configured local CLIP checkpoint not found: {clip_pretrained_path}"
+                )
+
+            print(f"Loading local CLIP weights from {clip_pretrained_path}", flush=True)
+            if clip_pretrained_path.endswith(".pt"):
+                self.model = open_clip.load_openai_model(
+                    clip_pretrained_path,
+                    precision='fp32',
+                    device='cpu',
+                    jit=False,
+                )
+            else:
+                self.model, _, _ = open_clip.create_model_and_transforms(
+                    "ViT-B/32",
+                    pretrained=clip_pretrained_path,
+                    device='cpu',
+                )
+        else:
+            # Build the CLIP backbone without any remote pretrained download.
+            # The task checkpoint loaded later in Retrieval.py already contains
+            # the model weights needed for evaluation.
+            self.model, _, _ = open_clip.create_model_and_transforms(
+                "ViT-B/32",
+                pretrained=None,
+                device='cpu',
+            )
+
+        if self.config['model'] == 'geo':
             if self.config['if_evaluation'] == False:
                 ckpt_path = "./pretrain/RS5M_ViT-B-32_RET-2.pt"
+                if not os.path.exists(ckpt_path):
+                    raise FileNotFoundError(
+                        f"Expected local pretrain checkpoint not found: {ckpt_path}"
+                    )
                 checkpoint = torch.load(ckpt_path, map_location='cpu')
                 msg = self.model.load_state_dict(checkpoint, strict=False)
-        else:
-            self.model, _, _ = open_clip.create_model_and_transforms("ViT-B/32")
 
     def get_vis_emb(self, image, idx=None, label=None):
         if self.config['is_harma']:

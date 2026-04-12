@@ -25,6 +25,75 @@ import datetime
 
 now = datetime.datetime.now()
 filename = now.strftime("%Y-%m-%d_%H-%M-%S-log.txt")
+PROJECT_ROOT = Path(__file__).resolve().parent
+PATH_LIKE_CONFIG_KEYS = {
+    'train_file',
+    'val_file',
+    'test_file',
+    'image_root',
+    'clip_pretrained_path',
+    'vision_config',
+    'resnet_ckpt',
+    'text_config',
+    'text_encoder',
+}
+
+
+def _candidate_paths(raw_path, config_path):
+    path = Path(raw_path).expanduser()
+    if path.is_absolute():
+        return [path]
+
+    candidates = [
+        Path.cwd() / path,
+        PROJECT_ROOT / path,
+        config_path.parent / path,
+    ]
+
+    trimmed = raw_path.replace("\\", "/")
+    while trimmed.startswith("../"):
+        trimmed = trimmed[3:]
+        candidates.append(PROJECT_ROOT / trimmed)
+        candidates.append(config_path.parent / trimmed)
+
+    if trimmed.startswith("./"):
+        trimmed = trimmed[2:]
+        candidates.append(PROJECT_ROOT / trimmed)
+        candidates.append(config_path.parent / trimmed)
+
+    deduped = []
+    seen = set()
+    for candidate in candidates:
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
+        deduped.append(candidate)
+    return deduped
+
+
+def _resolve_config_path(value, config_path):
+    if isinstance(value, list):
+        return [_resolve_config_path(item, config_path) for item in value]
+
+    if not isinstance(value, str):
+        return value
+
+    if value.startswith(('hdfs://', 'http://', 'https://')):
+        return value
+
+    for candidate in _candidate_paths(value, config_path):
+        if candidate.exists():
+            return str(candidate.resolve())
+
+    return value
+
+
+def normalize_config_paths(config, config_path):
+    for key in PATH_LIKE_CONFIG_KEYS:
+        if key in config:
+            config[key] = _resolve_config_path(config[key], config_path)
+    return config
 
 
 def set_trainable(model):
@@ -85,7 +154,7 @@ def train(model, data_loader, optimizer, tokenizer,epoch, device, scheduler, con
             loss = loss_triplet
         else:
             loss_contr,loss_triplet,_ = model(image, text_input, idx=idx, label=label)
-            loss = loss_contr + loss_triplet 
+            loss = loss_contr + config['triplet_weight'] * loss_triplet 
             # fake_loss = 0.0
             # for param in model.parameters():
             #     fake_loss += torch.sum(param)
@@ -411,8 +480,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     yaml = YAML()
 
-    with open(args.config, 'r') as config_file:
+    config_path = Path(args.config).resolve()
+
+    with open(config_path, 'r') as config_file:
         config = yaml.load(config_file)
+    config = normalize_config_paths(config, config_path)
 
     Path(args.output_dir).mkdir(parents=True, exist_ok=True)
         
