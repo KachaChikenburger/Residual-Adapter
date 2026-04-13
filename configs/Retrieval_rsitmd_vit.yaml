@@ -34,7 +34,8 @@ save_epoch: True
 save_num_epoch: 10
 
 adapter:
-  branch: legacy
+  #branch: legacy   ##harma分支
+  branch: parallel_single_mixer
   vision:
     enabled: true
     layer_ids: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]

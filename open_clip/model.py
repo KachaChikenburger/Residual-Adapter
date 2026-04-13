@@ -328,8 +328,11 @@ class ParallelSingleMixerAdapter(nn.Module):
         self.init_weights()
 
     def init_weights(self):
-        self.img_proj_up.weight.data.zero_()
-        self.img_proj_up.bias.data.zero_()
+        # Keep the branch output at zero when scale_init == 0.0, but avoid a
+        # dead start where both scale and up_proj are zero and no gradient can
+        # enter the adapter on the first step.
+        nn.init.normal_(self.img_proj_up.weight, std=1e-3)
+        nn.init.zeros_(self.img_proj_up.bias)
 
     def forward(self, x, attn_mask=None):
         attn_mask = attn_mask.to(x.dtype) if attn_mask is not None else None

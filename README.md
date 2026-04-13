@@ -1,29 +1,3 @@
-# HarMA
-
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/efficient-remote-sensing-with-harmonized/cross-modal-retrieval-on-rsitmd)](https://paperswithcode.com/sota/cross-modal-retrieval-on-rsitmd?p=efficient-remote-sensing-with-harmonized)
-
-[![PWC](https://img.shields.io/endpoint.svg?url=https://paperswithcode.com/badge/efficient-remote-sensing-with-harmonized/cross-modal-retrieval-on-rsicd)](https://paperswithcode.com/sota/cross-modal-retrieval-on-rsicd?p=efficient-remote-sensing-with-harmonized)
-
-This repo is the official implementation of "[Efficient Remote Sensing with Harmonized Transfer Learning and Modality Alignment](https://arxiv.org/abs/2404.18253)"(ICLRW 2024).
-
-- [Efficient Remote Sensing with Harmonized Transfer Learning and Modality Alignment](#harma)
-  - [Introduction 🌍](#introduction-)
-  - [Implementation 💻](#implementation-)
-    - [Environments 🌐](#environments-)
-    - [Datasets 📚](#datasets-)
-    - [Training 📈](#training-)
-    - [Testing 🧪](#testing-)
-  - [Citation 📜](#citation-)
-  - [Acknowledgement 🙏](#acknowledgement-)
-
-## Introduction 🌍
-
-This paper proposes a framework for efficient remote sensing using Harmonized Transfer Learning and Modality Alignment (HarMA), addressing key challenges in the field of remote sensing image-text retrieval. HarMA leverages a unified perspective on multimodal transfer learning to enhance task performance, modality alignment, and single-modality uniform alignment. The core innovation lies in the hierarchical multimodal adapter inspired by the human brain's information processing, which integrates shared mini-adapters to improve fine-grained semantic alignment. By employing parameter-efficient fine-tuning, HarMA significantly reduces training overhead while achieving state-of-the-art performance on popular multimodal retrieval tasks without relying on external data or other tricks. This approach outperforms fully fine-tuned models with minimal parameter adjustments, making it a versatile and resource-efficient solution for remote sensing applications. Experiments validate the effectiveness of HarMA, showcasing its potential to enhance vision and language representations in remote sensing tasks.
-
-![pipeline](assets/pipeline_harma.png)
-
-## Implementation 💻
-
 ### Environments 🌐
 
 Set up the environment by running:
